@@ -9,44 +9,8 @@ class ImpFuncsCIFloodMoz():
         self.road = self.step_impf()
         self.power_line = self.step_impf()
         self.power_plant = self.step_impf()
-        self.health_level1 = self.health_level_1_impf()
-        self.health_level_2_4 = self.health_level_2_4_impf()
-
-    def health_level_1_impf(self):
-        step_impf = ImpactFunc()
-        step_impf.id = 1
-        step_impf.haz_type = 'FL'
-        step_impf.name = 'Step function flood'
-        step_impf.intensity_unit = ''
-        step_impf.intensity = np.array([0, 0.99, 1, 2])
-        step_impf.mdd = np.array([0, 0, 1, 1])
-        step_impf.paa = np.sort(np.linspace(1, 1, num=4))
-        step_impf.check()
-        return step_impf
-
-    def health_level_2_4_impf(self):
-        step_impf = ImpactFunc()
-        step_impf.id = 2
-        step_impf.haz_type = 'FL'
-        step_impf.name = 'Step function flood'
-        step_impf.intensity_unit = ''
-        step_impf.intensity = np.array([0, 0.99, 1, 2])
-        step_impf.mdd = np.array([0, 0, 1, 1])
-        step_impf.paa = np.sort(np.linspace(1, 1, num=4))
-        step_impf.check()
-        return step_impf
-
-    def health_level_2_4_impf_adapt(self):  # assume that the larger hospitals are not vulnerable
-        step_impf = ImpactFunc()
-        step_impf.id = 2
-        step_impf.haz_type = 'FL'
-        step_impf.name = 'Step function flood'
-        step_impf.intensity_unit = ''
-        step_impf.intensity = np.array([0, 0.99, 1, 2])
-        step_impf.mdd = np.array([0, 0, 0, 0])
-        step_impf.paa = np.sort(np.linspace(1, 1, num=4))
-        step_impf.check()
-        return step_impf
+        self.health_level1 = self.step_impf()
+        self.health_level_2_4 = self.step_impf()
 
     def step_impf(self):
         step_impf = ImpactFunc()
@@ -56,6 +20,18 @@ class ImpFuncsCIFloodMoz():
         step_impf.intensity_unit = ''
         step_impf.intensity = np.array([0, 0.95, 0.955, 1])
         step_impf.mdd = np.array([0, 0, 1, 1])
+        step_impf.paa = np.sort(np.linspace(1, 1, num=4))
+        step_impf.check()
+        return step_impf
+
+    def impf_no_damage(self):
+        step_impf = ImpactFunc()
+        step_impf.id = 1
+        step_impf.haz_type = 'FL'
+        step_impf.name = 'Step function flood'
+        step_impf.intensity_unit = ''
+        step_impf.intensity = np.array([0, 0.95, 0.955, 1])
+        step_impf.mdd = np.array([0, 0, 0, 0])
         step_impf.paa = np.sort(np.linspace(1, 1, num=4))
         step_impf.check()
         return step_impf
@@ -126,6 +102,22 @@ class ImpFuncsCIWindMoz():
         return p_fail
 
     def pl_impf(self, v_crit=30, v_coll=60):
+        # Power line
+        v_eval = np.linspace(0, 120, num=120)
+        p_fail_powerlines = self.p_fail_pl(v_eval, v_crit=v_crit, v_coll=v_coll)
+        impf_prob = ImpactFunc()
+        impf_prob.id = 1
+        impf_prob.tag = 'PL_Prob'
+        impf_prob.haz_type = 'TC'
+        impf_prob.name = 'power line failure prob'
+        impf_prob.intensity_unit = 'm/s'
+        impf_prob.intensity = np.array(v_eval)
+        impf_prob.mdd = np.array(p_fail_powerlines)
+        impf_prob.paa = np.sort(np.linspace(1, 1, num=120))
+        impf_prob.check()
+        return impf_prob
+
+    def pl_impf_adapt(self, v_crit=35, v_coll=70):
         # Power line
         v_eval = np.linspace(0, 120, num=120)
         p_fail_powerlines = self.p_fail_pl(v_eval, v_crit=v_crit, v_coll=v_coll)
