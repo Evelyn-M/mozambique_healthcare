@@ -1,8 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[9]:
-
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -18,7 +13,7 @@ Parallel calculation per hazard via impact cascade to saving results.
 import os
 import sys
 import geopandas as gpd
-from copy import copy
+from copy import copy, deepcopy
 import numpy as np
 import pandas as pd
 import pickle
@@ -228,7 +223,7 @@ class ImpFuncsCIWind():
         impf_prob.check()
         return impf_prob
     
-    def pl_impf_adapt(self, v_crit=35, v_coll=70):
+    def pl_impf_adapt(self, v_crit=40, v_coll=80):
         # Power line
         v_eval = np.linspace(0, 120, num=120)
         p_fail_powerlines = self.p_fail_pl(v_eval, v_crit=v_crit, v_coll=v_coll)
@@ -305,9 +300,9 @@ class ImpFuncsCIWind():
 class ImpactThresh():
     def __init__(self):
         self.road = 500
-        self.power_line_e = 500
+        self.power_line_e = 500*0.4
         self.power_line_n = 0.4
-        self.power_tower = 500
+        self.power_tower = 500*0.4
         self.celltower = 0.4
         self.power_plant = 0.4
         self.water_plant = 0.4
@@ -383,15 +378,18 @@ def calc_point_impacts(haz, exp, impf_set):
     imp.calc(exp, impf_set, haz, save_mat=True)
     return imp
 
-def binary_impact_from_prob(imp, seed=47):
+def binary_impact_from_prob(imp, samples=1, seed=47):
     """
     where impact funcs were given as failure probability on y-axis: sample failure states
     e.g. for wind damage to power lines, and wind damage to power towers
     """
     np.random.seed = seed
-    rand = np.random.random(imp.imp_mat.data.size)
-    imp.imp_mat.data = np.array([1 if p_fail > rnd else 0 for p_fail, rnd in 
-                                 zip(imp.imp_mat.data, rand)])
+    data_sampled = np.zeros((samples, imp.imp_mat.data.size))
+    for sample in np.arange(samples):
+        rand = np.random.random(imp.imp_mat.data.size)
+        data_sampled[sample] = np.array([1 if p_fail > rnd else 0 for p_fail, rnd in 
+                                     zip(imp.imp_mat.data, rand)])
+    imp.imp_mat.data = data_sampled.mean(0,)
     return imp
 
 def binary_to_origres(imp, orig_res):
@@ -447,7 +445,7 @@ def comb_imps_to_network(ci_network, df_res):
     analogous function to impact_to_network, but for combined result datafrane
     from multihazard combined impacts
     """
-    ci_network_disr = copy.deepcopy(ci_network)
+    ci_network_disr = deepcopy(ci_network)
     # manually assign to network - roads
     ci_network_disr.edges.loc[ci_network_disr.edges.ci_type=='road',
                                   'func_internal'] = [np.min(
@@ -520,7 +518,7 @@ def save_resultdf(ci_graph_disr, path_save, event_name):
     df_res.to_feather(path_save+f'cascade_results_{event_name}')
 
 
-def wrapper_impacts_cascades_saving(haz, ci_network, exp_list, df_dependencies, friction_surf):
+def wrapper_impacts_cascades_saving(haz, ci_network, exp_list, df_dependencies, friction_surf, res_orig=500, samples=100):
     """
     Parameters
     ----------
@@ -535,47 +533,40 @@ def wrapper_impacts_cascades_saving(haz, ci_network, exp_list, df_dependencies, 
     imp_dict : Dict
         Basic service impacts compared to baseline
     """
-    if not os.path.isfile(path_save+f'cascade_results_{haz.event_name[0]}'):
-        print(haz.event_name)
-        # IMPACT CALCS
-        ci_network_disr = copy.deepcopy(ci_network)
-        for exp in exp_list:
-            imp = calc_point_impacts(haz, exp, impf_set)
-            if (haz_type in ['TC', 'EQ']) & (exp.tag in ['power_line_e', 'power_tower']):
-                imp = binary_impact_from_prob(imp, seed=47)
-                imp = binary_to_origres(imp, res_orig)
-            if exp.tag in ['road', 'power_line_e', 'power_tower']:
-                imp = u_lp.impact_pnt_agg(imp, exp.gdf, u_lp.AggMethod.SUM)
-            ci_network_disr = impacts_to_network(imp, exp.tag, ci_network_disr)
+    # IMPACT CALCS
+    ci_network_disr = deepcopy(ci_network)
+    for exp in exp_list:
+        imp = calc_point_impacts(haz, exp, impf_set)
+        if (haz_type in ['TC', 'EQ']) & (exp.tag in ['power_line_e', 'power_tower']):
+            imp = binary_impact_from_prob(imp, samples=samples, seed=47)
+            imp = binary_to_origres(imp, res_orig)
+        if exp.tag in ['road', 'power_line_e', 'power_tower']:
+            imp = u_lp.impact_pnt_agg(imp, exp.gdf, u_lp.AggMethod.SUM)
+        ci_network_disr = impacts_to_network(imp, exp.tag, ci_network_disr)
 
-        # IMPACT CASCADES
-        ci_graph_disr = Graph(ci_network_disr, directed=True)
-        ci_graph_disr.cascade(df_dependencies, p_source='power_plant', p_sink='power_line', 
+    # IMPACT CASCADES
+    ci_graph_disr = Graph(ci_network_disr, directed=True)
+    ci_graph_disr.cascade(df_dependencies, p_source='power_plant', p_sink='power_line', 
                               source_var='el_generation', demand_var='el_consumption',
                               preselect=False, initial=False, friction_surf=friction_surf, 
                               dur_thresh=60)
 
-        # SAVE RESULTS
-        save_resultdf(ci_graph_disr, path_save, haz.event_name[0])
-        # CALC IMPACTSTATS
-        ci_network_disr = ci_graph_disr.return_network()
-        imp_dict = nwu.disaster_impact_allservices_df(ci_network.nodes, ci_network_disr.nodes, 
+    # SAVE RESULTS
+    save_resultdf(ci_graph_disr, path_save, haz.event_name[0])
+    # CALC IMPACTSTATS
+    ci_network_disr = ci_graph_disr.return_network()
+    imp_dict = nwu.disaster_impact_allservices_df(ci_network.nodes, ci_network_disr.nodes, 
                                                       services=['power', 'healthcare', 'education', 
                                                                 'telecom', 'mobility'])
-        imp_dict['people'] = sum(ci_network_disr.nodes[ci_network_disr.nodes.ci_type=='people'].imp_dir)
-        return imp_dict
-    
-    df_res = gpd.read_feather(path_save+f'cascade_results_{haz.event_name[0]}')
-    return nwu.disaster_impact_allservices_df(
-        ci_network.nodes, df_res, 
-        services =['power', 'healthcare', 'education', 'telecom',  'mobility', 'people'])
+    imp_dict['people'] = sum(ci_network_disr.nodes[ci_network_disr.nodes.ci_type=='people'].imp_dir)
+    return imp_dict
      
 
 def combine_result_dfs(df_res1, df_res2):
     """
     Combine direct impacts, and assign combined internal functionality
     """
-    df_res = copy.deepcopy(df_res_tc)
+    df_res = deepcopy(df_res_tc)
     # simply sum direct impacts
     df_res['imp_dir'] = df_res_tc['imp_dir']+df_res_fl['imp_dir']
     # allocate failure thresholds
@@ -656,18 +647,19 @@ if __name__ == '__main__':
                 exp.write_hdf5(path_save+f'exposures/exp_{exp.tag}')
     
         else:
-            exp_health = Exposures().read_hdf5(path_save+'exposures/exp_health')
-            exp_educ =  Exposures().read_hdf5(path_save+'exposures/exp_education')
-            exp_celltowers =  Exposures().read_hdf5(path_save+'exposures/exp_celltower')
-            exp_pplant =  Exposures().read_hdf5(path_save+'exposures/exp_power_plant')
-            exp_pline_n =  Exposures().read_hdf5(path_save+'exposures/exp_power_line_n')
-            exp_people =  Exposures().read_hdf5(path_save+'exposures/exp_people')
-            exp_pline_e = Exposures().read_hdf5(path_save+'exposures/exp_power_line_e'),
-            exp_ptower = Exposures().read_hdf5(path_save+'exposures/exp_power_tower')
-            exp_road = Exposures().read_hdf5(path_save+'exposures/exp_road')
+            exp_health = Exposures.from_hdf5(path_save+'exposures/exp_health')
+            exp_educ =  Exposures.from_hdf5(path_save+'exposures/exp_education')
+            exp_celltowers =  Exposures.from_hdf5(path_save+'exposures/exp_celltower')
+            exp_pplant =  Exposures.from_hdf5(path_save+'exposures/exp_power_plant')
+            exp_pline_n =  Exposures.from_hdf5(path_save+'exposures/exp_power_line_n')
+            exp_people =  Exposures.from_hdf5(path_save+'exposures/exp_people')
+            exp_pline_e = Exposures.from_hdf5(path_save+'exposures/exp_power_line_e')
+            exp_ptower = Exposures.from_hdf5(path_save+'exposures/exp_power_tower')
+            exp_road = Exposures.from_hdf5(path_save+'exposures/exp_road')
         
 
         exp_pline_e.gdf['value'] = 500 if haz_type in ['FL', 'RF'] else 1 # damage fraction on y-axis for FL, failure prob on y-axis for EQ and TC
+        exp_ptower.gdf['value'] = 500 if haz_type in ['FL', 'RF'] else 1 
         exp_list = [exp_health, exp_educ, exp_celltowers, exp_pplant, 
                     exp_pline_n, exp_pline_e, exp_ptower, exp_road, exp_people]
        
@@ -677,7 +669,9 @@ if __name__ == '__main__':
         impf_set = make_impfset(ImpfClassDict()[haz_type])
         
         # CASCADE
-        imp_dict = wrapper_impacts_cascades_saving(haz, ci_network, exp_list, df_dependencies, friction_surf)
+        res_orig = 500
+        samples = 100
+        imp_dict = wrapper_impacts_cascades_saving(haz, ci_network, exp_list, df_dependencies, friction_surf, res_orig, samples)
 
     elif haz_type=='TCFL':
         # combine direct flood & wind impacts from previous runs
